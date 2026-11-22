@@ -1,0 +1,612 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Metric Pulse - Pool Reliability History</title>
+<meta name="description" content="Track Metric pool reliability in real time: price provider uptime, feed_down outages, tier changes, spread, volume and TVL, with full history. Unofficial community tool.">
+<meta name="description" content="Historical reliability, tier changes and spread volatility for Metric pools. Unofficial community tool.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#05060d;--card:rgba(18,20,38,.62);--line:rgba(140,150,255,.16);--tx:#e8eaff;--mut:#8a90b8;--v:#7c5cff;--c:#00e5ff;--ok:#2dff9a;--warn:#ffc548;--bad:#ff4d6d;--or:#ff8a3d}
+*{box-sizing:border-box;margin:0}
+body{background:var(--bg);color:var(--tx);font:15px/1.5 'Space Grotesk',system-ui,sans-serif;min-height:100vh;overflow-x:hidden}
+body:before,body:after{content:"";position:fixed;width:60vmax;height:60vmax;border-radius:50%;filter:blur(120px);opacity:.28;z-index:-2;animation:drift 22s ease-in-out infinite alternate}
+body:before{background:var(--v);top:-25vmax;left:-15vmax}body:after{background:var(--c);bottom:-30vmax;right:-20vmax;animation-delay:-9s}
+@keyframes drift{to{transform:translate(8vmax,6vmax) scale(1.15)}}
+#net{position:fixed;inset:0;z-index:-1;pointer-events:none}
+.mono{font-family:'JetBrains Mono',monospace}
+.wrap{max-width:1180px;margin:0 auto;padding:0 20px}
+nav{display:flex;justify-content:space-between;align-items:center;padding:22px 0}
+.logo{font-weight:700;font-size:18px;letter-spacing:.5px;display:flex;gap:10px;align-items:center}
+.logo i{width:26px;height:26px;border-radius:8px;background:conic-gradient(from 200deg,var(--v),var(--c),var(--ok),var(--v));box-shadow:0 0 18px var(--v)}
+.live{display:flex;gap:8px;align-items:center;font-size:12px;padding:6px 12px;border:1px solid var(--line);border-radius:99px;background:var(--card);backdrop-filter:blur(10px)}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 0 var(--ok);animation:pulse 2s infinite}
+@keyframes pulse{70%{box-shadow:0 0 0 9px transparent}}
+.demo{background:linear-gradient(90deg,var(--warn),var(--or));color:#111;text-align:center;font-size:12px;font-weight:700;padding:5px}
+.hero{display:grid;grid-template-columns:1.3fr 1fr;gap:30px;align-items:center;padding:36px 0 26px}
+h1{font-size:clamp(34px,5.4vw,60px);line-height:1.05;letter-spacing:-1.5px}
+h1 b{background:linear-gradient(90deg,var(--c),var(--v),var(--ok));-webkit-background-clip:text;background-clip:text;color:transparent;background-size:200%;animation:flow 6s linear infinite}
+@keyframes flow{to{background-position:200%}}
+.sub{color:var(--mut);margin-top:14px;max-width:520px}
+.orb{position:relative;width:min(280px,70vw);aspect-ratio:1;margin:auto;display:grid;place-items:center}
+.orb svg{position:absolute;inset:0;transform:rotate(-90deg);filter:drop-shadow(0 0 14px var(--oc,var(--ok)))}
+.orb circle{fill:none;stroke-width:9;stroke-linecap:round}
+.orb .bg{stroke:rgba(255,255,255,.07)}.orb .fg{stroke:var(--oc,var(--ok));transition:stroke-dashoffset 1.4s cubic-bezier(.2,.8,.2,1)}
+.orb div{text-align:center}.orb strong{font-size:50px;display:block;line-height:1}.orb span{color:var(--mut);font-size:12px;letter-spacing:2px;text-transform:uppercase}
+.card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:20px;backdrop-filter:blur(14px);transition:.3s;position:relative}
+.card:hover{border-color:rgba(124,92,255,.5);box-shadow:0 0 30px -8px var(--v)}
+.grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+.kpi small{color:var(--mut);font-size:12px;letter-spacing:1.5px;text-transform:uppercase}
+.kpi b{display:block;font-size:32px;margin-top:6px;letter-spacing:-1px}
+.kpi em{font-style:normal;font-size:12px;color:var(--mut)}
+section{margin-top:26px}
+.hd{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px}
+h2{font-size:18px}h2 span{color:var(--mut);font-weight:400;font-size:13px;margin-left:8px}
+.seg{display:flex;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.seg button{background:none;border:0;color:var(--mut);padding:6px 14px;cursor:pointer;font:inherit;font-size:13px}
+.seg button.on{background:linear-gradient(135deg,var(--v),#4f7bff);color:#fff}
+.chart{position:relative;cursor:crosshair}.chart svg{width:100%;display:block}
+.cur{position:absolute;top:0;bottom:0;width:1px;background:var(--c);pointer-events:none;display:none}
+.tip{position:fixed;z-index:9;background:#0c0e1f;border:1px solid var(--v);border-radius:10px;padding:8px 12px;font-size:12px;pointer-events:none;display:none;box-shadow:0 8px 30px #000a;white-space:nowrap}
+.axis{display:flex;justify-content:space-between;color:var(--mut);font-size:11px;margin-top:6px}
+.tabs{display:flex;gap:6px;flex-wrap:wrap}
+.tabs button{background:var(--card);border:1px solid var(--line);color:var(--mut);border-radius:10px;padding:8px 16px;cursor:pointer;font:inherit;transition:.2s}
+.tabs button.on{color:#fff;border-color:var(--c);box-shadow:0 0 16px -4px var(--c)}
+.tools{display:flex;gap:10px;margin:14px 0}
+input,select{background:rgba(255,255,255,.04);border:1px solid var(--line);color:var(--tx);border-radius:10px;padding:9px 13px;font:inherit;outline:none}
+input{flex:1;min-width:0}input:focus,select:focus{border-color:var(--c)}
+select option{background:#0c0e1f}
+.scroll{overflow-x:auto;padding-bottom:10px}
+@supports not selector(::-webkit-scrollbar){.scroll{scrollbar-width:thin;scrollbar-color:var(--v) transparent}}
+.scroll::-webkit-scrollbar{height:8px}
+.scroll::-webkit-scrollbar-track{background:rgba(255,255,255,.04);border-radius:99px}
+.scroll::-webkit-scrollbar-thumb{background:linear-gradient(90deg,var(--v),var(--c));border-radius:99px;box-shadow:0 0 10px -2px var(--v)}
+.scroll::-webkit-scrollbar-thumb:hover{filter:brightness(1.25)}
+.scroll::-webkit-scrollbar-button{display:none}
+.pager{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-top:12px;font-size:13px}
+.pg{display:flex;gap:6px;align-items:center}
+.pg button{min-width:34px;height:34px;padding:0 10px;border-radius:10px;background:var(--card);border:1px solid var(--line);color:var(--mut);cursor:pointer;font:inherit;transition:.2s}
+.pg button:hover:not(:disabled){color:#fff;border-color:var(--c)}
+.pg button.on{color:#fff;background:linear-gradient(135deg,var(--v),#4f7bff);border-color:transparent;box-shadow:0 0 14px -3px var(--v)}
+.pg button:disabled{opacity:.35;cursor:default}
+.pg .gap{color:var(--mut);padding:0 2px}
+.pager select{padding:7px 10px}
+table{width:100%;border-collapse:collapse;font-size:13.5px}
+th{color:var(--mut);font-weight:500;text-align:left;padding:10px 12px;font-size:11px;letter-spacing:1.2px;text-transform:uppercase;cursor:pointer;white-space:nowrap;user-select:none}
+th.on{color:var(--c)}
+td{padding:11px 12px;border-top:1px solid var(--line);white-space:nowrap}
+tbody tr{transition:.2s}tbody tr:hover{background:rgba(124,92,255,.08)}
+.pill{display:inline-block;padding:2px 10px;border-radius:99px;font-size:12px;color:var(--c);background:color-mix(in srgb,var(--c) 14%,transparent);border:1px solid color-mix(in srgb,var(--c) 45%,transparent)}
+.bar{display:inline-block;width:70px;height:6px;border-radius:9px;background:rgba(255,255,255,.08);vertical-align:middle;margin-right:8px;overflow:hidden}.bar i{display:block;height:100%;border-radius:9px}
+.ev{display:flex;gap:14px;padding:12px 4px;border-top:1px solid var(--line);align-items:center}.ev:first-child{border:0}
+.ev .dot{animation:none;flex:none}.ev time{margin-left:auto;color:var(--mut);font-size:12px;white-space:nowrap}
+.mut{color:var(--mut)}.empty{text-align:center;color:var(--mut);padding:30px}
+footer{margin:50px 0 30px;color:var(--mut);font-size:12px;text-align:center}footer a{color:var(--c);text-decoration:none}
+.rv{opacity:0;transform:translateY(18px);transition:.7s cubic-bezier(.2,.8,.2,1)}.rv.in{opacity:1;transform:none}
+[data-a]{cursor:pointer}
+.modal{position:fixed;inset:0;z-index:20;background:rgba(3,4,10,.74);backdrop-filter:blur(8px);display:flex;justify-content:center;align-items:flex-start;overflow:auto;padding:4vh 14px;animation:fade .25s}
+.modal[hidden]{display:none}
+.sheet{width:min(940px,100%);background:#0b0d1f;border:1px solid var(--v);border-radius:22px;padding:24px;box-shadow:0 0 90px -10px var(--v);animation:up .35s cubic-bezier(.2,.8,.2,1)}
+@keyframes fade{from{opacity:0}}@keyframes up{from{opacity:0;transform:translateY(30px) scale(.98)}}
+.x{background:none;border:1px solid var(--line);color:var(--tx);width:34px;height:34px;border-radius:10px;cursor:pointer;font-size:15px}.x:hover{border-color:var(--bad)}
+.mini{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:16px 0}
+.kv{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px}.kv div{border:1px solid var(--line);border-radius:12px;padding:10px 12px;font-size:13px}.kv small{display:block;color:var(--mut);font-size:11px;letter-spacing:1px;text-transform:uppercase;margin-bottom:2px}
+.mini div{border:1px solid var(--line);border-radius:12px;padding:10px 12px}.mini small{display:block;color:var(--mut);font-size:11px;letter-spacing:1px;text-transform:uppercase}.mini b{font-size:21px}
+.lbl{color:var(--mut);font-size:11px;letter-spacing:1.2px;text-transform:uppercase;margin:18px 0 6px}
+@media(max-width:820px){.mini{grid-template-columns:1fr 1fr}}
+@media(max-width:820px){.hero{grid-template-columns:1fr}.grid4{grid-template-columns:1fr 1fr}.orb{order:-1;width:200px}.orb strong{font-size:36px}}
+@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<canvas id="net"></canvas>
+<div id="demo" class="demo" hidden>DEMO DATA</div>
+<div class="wrap">
+  <nav>
+    <div class="logo"><i></i>METRIC&nbsp;PULSE</div>
+    <div class="live mono"><span class="dot"></span><span id="age">connecting…</span></div>
+  </nav>
+
+  <header class="hero">
+    <div>
+      <h1>Reliability history for <b>Metric pools</b></h1>
+      <p class="sub">The API only shows right now. Pulse polls Metric's public API every 20 seconds and records history, so you can see which price providers go <span class="mono">feed_down</span>, which pools change tier, and how spreads and volume move over time.</p>
+    </div>
+    <div class="orb" id="orb">
+      <svg viewBox="0 0 120 120"><circle class="bg" cx="60" cy="60" r="52"/><circle class="fg" id="ring" cx="60" cy="60" r="52" stroke-dasharray="326.7" stroke-dashoffset="326.7"/></svg>
+      <div><strong id="o-pct">–</strong><span>pools healthy</span></div>
+    </div>
+  </header>
+
+  <div class="grid4 rv" id="kpis"></div>
+
+  <section class="card rv">
+    <div class="hd"><h2>Network health<span id="rng-note"></span></h2>
+      <div class="seg" id="range"><button data-h="6">6h</button><button data-h="24" class="on">24h</button><button data-h="72">72h</button></div></div>
+    <div class="chart" id="tl"></div>
+    <div class="axis mono"><span id="t0"></span><span>% of pools healthy per snapshot</span><span id="t1"></span></div>
+  </section>
+
+  <section class="card rv">
+    <div class="hd"><h2>Median spread<span>bps across priced pools</span></h2></div>
+    <div class="chart" id="sp"></div>
+    <div class="axis mono"><span id="s0"></span><span id="s1"></span></div>
+  </section>
+
+  <section class="rv">
+    <div class="tabs" id="tabs"><button data-t="pools" class="on">Pools</button><button data-t="prov">Price providers</button><button data-t="ev">Events</button></div>
+    <div class="card" style="margin-top:14px">
+      <div class="tools" id="tools"><input id="q" placeholder="Search pair or address…"><select id="chain"></select></div>
+      <div class="scroll" id="out"></div>
+      <div class="pager" id="pager"></div>
+    </div>
+  </section>
+
+  <footer>Unofficial community tool, not affiliated with Metric. Live data from <a href="https://docs.metric.xyz/reference/api.md" target="_blank" rel="noopener">api.metric.xyz</a>. History is recorded while this page is open.</footer>
+</div>
+<div class="modal" id="modal" hidden><div class="sheet"></div></div>
+<div class="tip mono" id="tip"></div>
+
+<script type="module">
+// ───────── Firebase config: history is READ from here (empty = history kept in this browser only) ─────────
+// Project settings → General → Your apps → Web app. Then paste firestore.rules into Firestore → Rules.
+const CFG = { apiKey: "AIzaSyBbrIngfCX5W0HdH2DdQqdKugdBnFPNi7o", authDomain: "metricpulse-da4ae.firebaseapp.com", projectId: "metricpulse-da4ae", appId: "1:421079046660:web:7c0e09d2997ef653017351" };
+// History is written by the Render backend, so this page only READS Firebase. Set true only if you want browsers to log too
+// (also requires the write rules from the single-file version).
+const CLIENT_WRITE = false;
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const S = ['healthy', 'feed_down', 'pool_refused', 'pool_paused', 'unknown'];
+const T = ['green', 'yellow', 'red', 'unclassified', 'black'];
+const SC = ['#2dff9a', '#ff4d6d', '#ffc548', '#ff8a3d', '#6b7390'];
+const TC = ['#2dff9a', '#ffc548', '#ff4d6d', '#6b7390', '#b06bff'];
+const STEP = 10; // minutes between snapshots
+let DEMO = new URLSearchParams(location.search).has('demo'); // ?demo forces demo data; also used if the API is unreachable
+const st = { tab: 'pools', q: '', chain: '', key: 'tv', dir: -1, hours: 24, page: 0, size: 10 };
+let reg = { pools: {}, chains: [] }, snaps = [], hist = [], live = null, events = [], anim = true, sel = null;
+
+// ───────── helpers ─────────
+const short = a => a ? a.slice(0, 6) + '…' + a.slice(-4) : '—';
+const usd = n => n >= 1e6 ? '$' + (n / 1e6).toFixed(2) + 'M' : n >= 1e3 ? '$' + (n / 1e3).toFixed(1) + 'K' : '$' + Math.round(n);
+const ago = t => { const s = Date.now() / 1e3 - t; return s < 90 ? 'just now' : s < 5400 ? Math.round(s / 60) + 'm ago' : s < 129600 ? Math.round(s / 3600) + 'h ago' : Math.round(s / 86400) + 'd ago' };
+const clock = t => new Date(t * 1e3).toLocaleString('en-GB', { month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+const pill = (t, c) => `<span class="pill" style="--c:${c}">${esc(t)}</span>`;
+const med = a => { if (!a.length) return null; a = [...a].sort((x, y) => x - y); return a[a.length >> 1] };
+const pct = (a, q) => { if (!a.length) return null; a = [...a].sort((x, y) => x - y); return a[Math.min(a.length - 1, Math.floor(a.length * q))] };
+const fx = (v, d = 2) => v == null ? '—' : v.toFixed(d);
+function count(el, to, fmt = v => Math.round(v)) {
+  if (!anim) { el.textContent = fmt(to); return }
+  const t0 = performance.now(), d = 900;
+  (function f(t) { const k = Math.min(1, (t - t0) / d); el.textContent = fmt(to * (1 - Math.pow(1 - k, 3))); if (k < 1) requestAnimationFrame(f) })(t0);
+}
+function spark(v, c = '#00e5ff') {
+  v = v.slice(-60); if (v.length < 2) return '<span class="mut">—</span>';
+  const w = 90, h = 24, mx = Math.max(...v), mn = Math.min(...v), r = mx - mn || 1;
+  return `<svg width="${w}" height="${h}"><polyline fill="none" stroke="${c}" stroke-width="1.5" stroke-linejoin="round" points="${v.map((y, i) => `${(i / (v.length - 1) * w).toFixed(1)},${(h - 2 - (y - mn) / r * (h - 4)).toFixed(1)}`).join(' ')}"/></svg>`;
+}
+function hover(el, fn) {
+  const tip = $('#tip'), cur = document.createElement('div'); cur.className = 'cur'; el.append(cur);
+  el.onmousemove = e => {
+    const b = el.getBoundingClientRect(), i = Math.max(0, Math.min(snaps.length - 1, Math.floor((e.clientX - b.left) / b.width * snaps.length)));
+    cur.style.display = 'block'; cur.style.left = ((i + .5) / snaps.length * 100) + '%';
+    tip.style.display = 'block'; tip.innerHTML = fn(snaps[i]);
+    tip.style.left = Math.min(innerWidth - tip.offsetWidth - 10, e.clientX + 14) + 'px'; tip.style.top = e.clientY + 16 + 'px';
+  };
+  el.onmouseleave = () => { cur.style.display = 'none'; tip.style.display = 'none' };
+}
+
+// ───────── data layer: live from Metric's public API (no key) + history store ─────────
+const API_BASES = ['https://api.metric.xyz/public/v1', '/metric-api']; // direct first; falls back to the Vercel rewrite in vercel.json
+const POLL = Math.max(5, +new URLSearchParams(location.search).get('poll') || 20) * 1e3, BUCKET = 600, MAXU = 2n ** 128n - 1n;
+let base = null, chains = null, prev = null, FULL = {}, store, backoff = 0, busy = false, fails = 0, demoOn = false, unsub = null, fbErr = null;
+const wrote = new Set();
+
+async function api(path, opt = {}) {
+  let err;
+  for (const b of base ? [base] : API_BASES) {
+    try {
+      const r = await fetch(b + path, { ...opt, ...(opt.body && { headers: { 'content-type': 'application/json' } }) });
+      if (r.status === 429) { backoff = Math.min(120e3, (backoff || POLL) * 2); throw new Error('rate limited (429)') }
+      if (!r.ok) throw new Error(`${path} → ${r.status}`);
+      const j = await r.json(); base = b; return j;
+    } catch (e) { err = e; if (/429/.test(e.message)) break }
+  }
+  throw err;
+}
+const spreadBps = q => { // (ask-bid)/mid in bps; null if unpriced
+  try { const b = BigInt(q.bidAdj), a = BigInt(q.askAdj); return b <= 0n || a >= MAXU || a < b ? null : Number(((a - b) * 2000000n) / (a + b)) / 100 } catch { return null }
+};
+async function getChains() {
+  const raw = await api('/chains'), arr = Array.isArray(raw) ? raw : raw.chains || raw.data;
+  const l = arr ? arr.map(c => ({ id: c.chainId ?? c.chain_id ?? c.id, name: c.name ?? c.chain ?? String(c.chainId ?? c.id) })) : Object.entries(raw).map(([name, id]) => ({ id: +id, name }));
+  return l.filter(c => Number.isInteger(c.id));
+}
+async function poll() {
+  chains ??= await getChains();
+  const R = { pools: {} }, p = {}, full = {}, c = [0, 0, 0, 0, 0], k = [0, 0, 0, 0, 0]; let tvl = 0, vol = 0, okChains = 0;
+  await Promise.all(chains.map(async ch => {
+    try {
+      const pools = []; for (let off = 0; off != null; ) { const r = await api(`/evm/${ch.id}/metadata?count=500&offset=${off}&include24h=true`); pools.push(...r.data); off = r.nextOffset }
+      const ok = pools.filter(x => x.priceProviderStatus === 'healthy' && !x.pauseLevel).map(x => x.poolAddress), sp = {};
+      for (let i = 0; i < ok.length; i += 100) {
+        try { const r = await api(`/evm/${ch.id}/bid_ask/batch`, { method: 'POST', body: JSON.stringify({ pools: ok.slice(i, i + 100), depth: false }) }); for (const q of r.results) if (q.quote) sp[q.poolAddress.toLowerCase()] = spreadBps(q.quote) } catch (e) { console.warn('bid_ask', e.message) }
+      }
+      for (const x of pools) {
+        const a = x.poolAddress.toLowerCase(), si = S.includes(x.priceProviderStatus) ? S.indexOf(x.priceProviderStatus) : 4, ti = Math.max(0, T.indexOf(x.classificationSummary?.tierQualification));
+        const tv = Math.round(x.tvlFiat ?? 0), v = Math.round(x.analytics24h?.volumeFiat ?? x.volumeByWindow?.['24h'] ?? 0);
+        R.pools[a] = { pair: x.pair, chain: ch.name, pp: x.priceProviderAddress, pt: x.priceProviderDetails?.providerType ?? null }; full[a] = x;
+        p[a] = [si, ti, sp[a] ?? null, tv, v, x.aprBps7d ?? null, x.pauseLevel ?? 0, x.token0FiatPrice ?? null, x.token1FiatPrice ?? null];
+        c[si]++; k[ti]++; tvl += tv; vol += v;
+      }
+      okChains++;
+    } catch (e) { console.warn('chain', ch.name, e.message) }
+  }));
+  if (!okChains || !Object.keys(p).length) throw new Error('no pool data returned');
+  R.chains = chains.map(x => x.name);
+  return { snap: { ts: Math.floor(Date.now() / 1e3), n: Object.keys(p).length, c, k, tvl, vol, p }, reg: R, full };
+}
+
+// ── history stores: shared (Firebase) or local (IndexedDB) ──
+async function initStore() {
+  if (CFG.projectId) {
+    const u = 'https://www.gstatic.com/firebasejs/10.14.1/';
+    const [{ initializeApp }, f] = await Promise.all([import(u + 'firebase-app.js'), import(u + 'firebase-firestore.js')]);
+    const db = f.getFirestore(initializeApp(CFG));
+    return {
+      mode: 'shared',
+      watchHist: (h, cb, err) => f.onSnapshot(f.query(f.collection(db, 'snapshots'), f.orderBy('ts', 'desc'), f.limit(h * 3600 / BUCKET)), q => cb(q.docs.map(d => d.data()).reverse()), err),
+      save: x => f.setDoc(f.doc(db, 'snapshots', String(x.ts)), x),   // create-only bucket doc: first writer per 10 min wins
+      has: async ts => (await f.getDoc(f.doc(db, 'snapshots', String(ts)))).exists(),
+      addEvents: evs => Promise.all(evs.map(({ id, ...e }) => f.setDoc(f.doc(db, 'events', id), e).catch(() => {}))),
+      onEvents: cb => f.onSnapshot(f.query(f.collection(db, 'events'), f.orderBy('ts', 'desc'), f.limit(300)), q => cb(q.docs.map(d => d.data())), console.error),
+    };
+  }
+  const open = await new Promise((res, rej) => { const r = indexedDB.open('metric-pulse', 1); r.onupgradeneeded = () => { r.result.createObjectStore('snaps', { keyPath: 'ts' }); r.result.createObjectStore('events', { keyPath: 'id' }) }; r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error) });
+  const run = (n, m, fn) => new Promise((res, rej) => { const t = open.transaction(n, m), q = fn(t.objectStore(n)); t.oncomplete = () => res(q?.result); t.onerror = () => rej(t.error) });
+  run('snaps', 'readwrite', o => o.delete(IDBKeyRange.upperBound(Date.now() / 1e3 - 14 * 86400))).catch(() => {});
+  return {
+    mode: 'local',
+    loadHist: h => run('snaps', 'readonly', o => o.getAll(IDBKeyRange.lowerBound(Date.now() / 1e3 - h * 3600))),
+    save: x => run('snaps', 'readwrite', o => o.put(x)),
+    addEvents: evs => run('events', 'readwrite', o => { evs.forEach(e => o.put(e)) }),
+    loadEvents: async () => (await run('events', 'readonly', o => o.getAll())).sort((a, b) => b.ts - a.ts).slice(0, 300),
+  };
+}
+const memStore = { mode: 'memory', loadHist: async () => [], save: async () => {}, addEvents: async () => {}, loadEvents: async () => [] };
+
+// detect status/tier/pause changes vs previous state, persist snapshot once per 10-min bucket
+async function record(snap) {
+  if (store.mode === 'shared' && !CLIENT_WRITE) return; // Firebase is filled by the backend; nothing to log from the browser
+  const b = Math.floor(snap.ts / BUCKET) * BUCKET, last = hist.at(-1);
+  const cur = Object.fromEntries(Object.entries(snap.p).map(([a, v]) => [a, [v[0], v[1], v[6] ?? 0]]));
+  if (!prev && last && snap.ts - last.ts < 1800) prev = Object.fromEntries(Object.entries(last.p).map(([a, v]) => [a, [v[0], v[1], v[6] ?? 0]]));
+  const evs = [];
+  if (prev) for (const a in cur) {
+    const o = prev[a], [s1, t1, z1] = cur[a], i = reg.pools[a] || {};
+    const add = (kind, from, to) => evs.push({ id: `${a}_${kind}_${from}_${to}_${b}`, ts: snap.ts, a, pair: i.pair, chain: i.chain, kind, from, to });
+    if (!o) { if (Object.keys(prev).length) add('new', 'none', S[s1]); continue }
+    if (o[0] !== s1) add('status', S[o[0]], S[s1]);
+    if (o[1] !== t1) add('tier', T[o[1]], T[t1]);
+    if (o[2] !== z1) add('pause', String(o[2]), String(z1));
+  }
+  prev = cur;
+  if (evs.length) { if (store.mode !== 'shared') events = [...evs, ...events].slice(0, 300); store.addEvents(evs).catch(() => {}) }
+  if (!wrote.has(b) && (last?.ts ?? 0) < b) {
+    wrote.add(b); const x = { ...snap, ts: b };
+    if (store.mode !== 'shared') { hist.push(x); while (hist.length > st.hours * 3600 / BUCKET) hist.shift() }
+    store.save(x).then(() => { fbErr = null }).catch(async e => { // denied because another visitor already wrote this bucket is normal
+      if (store.has && await store.has(b).catch(() => true)) return;
+      fbErr = e.code || e.message; console.warn('Firebase write failed:', fbErr); tick();
+    });
+  }
+}
+
+function watchHist() { // shared mode: live subscription to snapshots/*
+  return new Promise(res => {
+    unsub?.(); let first = true; const done = () => first && (first = false, res());
+    unsub = store.watchHist(st.hours, h => { if (DEMO) return done(); hist = h; merge(); if (live) redraw(); done() }, e => { console.error(e); fbErr = e.code || e.message; done() });
+  });
+}
+const loadH = async () => store.mode === 'shared' ? watchHist() : (hist = await store.loadHist(st.hours).catch(() => []));
+const merge = () => { snaps = live && live.ts > (hist.at(-1)?.ts ?? 0) ? [...hist, live] : hist };
+const redraw = () => { if (snaps.length) { render(); modal() } };
+
+function useDemo(msg) {
+  DEMO = true;
+  if (!demoOn || hist.length !== st.hours * 6) { ({ reg, snaps: hist, events } = demo()); live = null; demoOn = true }
+  merge(); $('#demo').textContent = msg; $('#demo').hidden = false;
+}
+async function reload() { // range change
+  if (DEMO) useDemo($('#demo').textContent); else { await loadH(); merge() }
+  redraw();
+}
+async function cycle() {
+  if (busy || (document.hidden && snaps.length)) return; busy = true;
+  try {
+    const { snap, reg: r, full } = await poll();
+    if (DEMO) { DEMO = false; demoOn = false; await loadH(); if (store.mode !== 'shared') events = await store.loadEvents().catch(() => []) }
+    reg = r; FULL = full; live = snap; fails = 0; backoff = 0; $('#demo').hidden = true;
+    merge(); await record(snap); merge(); redraw();
+  } catch (e) {
+    console.error(e); fails++;
+    if (!snaps.length || DEMO) useDemo(`DEMO DATA — could not reach Metric API (${e.message}). If this is a CORS error, deploy with vercel.json so /metric-api proxies the API.`), redraw();
+    else { $('#age').textContent = 'API error · retrying'; $('.live .dot').style.background = 'var(--bad)' }
+  } finally { busy = false }
+}
+async function start() {
+  if (!DEMO) {
+    store = await initStore().catch(e => { console.warn('store unavailable:', e.message); return memStore });
+    await loadH();
+    if (store.mode === 'shared') store.onEvents(e => { events = e; redraw() }); else events = await store.loadEvents().catch(() => []);
+    merge();
+  } else useDemo('DEMO DATA — ?demo mode');
+  const loop = async () => { if (!DEMO || !demoOn || fails) await cycle(); setTimeout(loop, Math.max(POLL, backoff)) };
+  await (DEMO && demoOn && !fails ? Promise.resolve(redraw()) : cycle());
+  setTimeout(loop, POLL);
+}
+
+// per-pool stats over the loaded window (current pools only)
+function stats() {
+  const last = snaps.at(-1), P = {}, since = snaps[0]?.ts ?? 0;
+  snaps.forEach(s => { for (const a in s.p) {
+    const [x, t, sp] = s.p[a], o = P[a] ??= { a, ...reg.pools?.[a], n: 0, ok: 0, ep: 0, ps: null, pt: null, tc: 0, sp: [] };
+    o.n++; if (x === 0) o.ok++; if (x === 1 && o.ps !== 1) o.ep++; o.ps = x;
+    if (o.pt != null && o.pt !== t) o.tc++; o.pt = t; if (sp != null) o.sp.push(sp);
+  } });
+  return Object.values(P).filter(o => last?.p[o.a]).map(o => {
+    const [x, t, sp, tv, vol, apr, pz] = last.p[o.a], m = o.sp.length ? o.sp.reduce((a, b) => a + b, 0) / o.sp.length : null;
+    return { ...o, cs: x, ct: t, now: sp, tv, vol: vol ?? 0, apr, pz: pz ?? 0, up: o.ok / o.n * 100, avg: m, p95: pct(o.sp, .95), sd: m == null ? null : Math.sqrt(o.sp.reduce((a, b) => a + (b - m) ** 2, 0) / o.sp.length) };
+  });
+}
+
+// ───────── render ─────────
+function render() {
+  if (!snaps.length) { $('#out').innerHTML = '<div class="empty">No snapshots yet — run the collector first.</div>'; return }
+  const last = snaps.at(-1), rows = stats(), tot = last.n || 1, ok = last.c[0], pctOk = ok / tot * 100;
+  const inc = rows.reduce((a, r) => a + r.ep, 0), tc = rows.reduce((a, r) => a + r.tc, 0);
+  const oc = pctOk >= 99 ? SC[0] : pctOk >= 90 ? SC[2] : SC[1];
+  $('#orb').style.setProperty('--oc', oc);
+  $('#ring').style.strokeDashoffset = 326.7 * (1 - pctOk / 100);
+  count($('#o-pct'), pctOk, v => v.toFixed(1) + '%');
+  tick();
+  $('#rng-note').textContent = `${snaps.length} snapshots`;
+  $('#kpis').innerHTML = [
+    ['Pools tracked', tot, 'across ' + (reg.chains?.length || '–') + ' chains', 0],
+    ['feed_down now', last.c[1], `${inc} outage episode${inc == 1 ? '' : 's'} in ${st.hours}h`, 1],
+    ['Tier changes', tc, `${last.k[0]} green · ${last.k[1]} yellow · ${last.k[2]} red`, 2],
+    ['Tracked TVL', last.tvl, `24h volume ${usd(last.vol || 0)}`, 3],
+  ].map(([l, v, s, i]) => `<div class="card kpi"><small>${l}</small><b data-v="${v}" data-i="${i}">0</b><em>${s}</em></div>`).join('');
+  document.querySelectorAll('.kpi b').forEach(b => count(b, +b.dataset.v, +b.dataset.i == 3 ? usd : undefined));
+
+  // health timeline
+  const n = snaps.length, bw = 1000 / n;
+  $('#tl').innerHTML = `<svg viewBox="0 0 1000 64" preserveAspectRatio="none" height="64">${snaps.map((s, i) => {
+    const p = s.c[0] / (s.n || 1) * 100, h = 14 + p * .5;
+    return `<rect x="${(i * bw).toFixed(2)}" y="${64 - h}" width="${Math.max(bw - 1, .6).toFixed(2)}" height="${h}" rx="1.5" fill="${p >= 99 ? SC[0] : p >= 90 ? SC[2] : SC[1]}" opacity=".9"/>`;
+  }).join('')}</svg>`;
+  hover($('#tl'), s => `<b>${clock(s.ts)}</b><br>${S.map((x, i) => s.c[i] ? `<span style="color:${SC[i]}">●</span> ${x}: ${s.c[i]}` : '').filter(Boolean).join('<br>')}`);
+  $('#t0').textContent = clock(snaps[0].ts); $('#t1').textContent = clock(last.ts);
+
+  // spread chart
+  const ch = area(snaps.map(s => med(Object.values(s.p).map(v => v[2]).filter(v => v != null))), 180);
+  $('#sp').innerHTML = ch.svg;
+  hover($('#sp'), s => { const v = med(Object.values(s.p).map(x => x[2]).filter(x => x != null)); return `<b>${clock(s.ts)}</b><br>median spread: ${fx(v)} bps` });
+  $('#s0').textContent = `min ${fx(ch.mn)} bps`; $('#s1').textContent = `max ${fx(ch.mx)} bps`;
+
+  // chain filter
+  const sel = $('#chain'), chains = [...new Set(rows.map(r => r.chain))].sort();
+  if (sel.options.length != chains.length + 1) sel.innerHTML = '<option value="">All chains</option>' + chains.map(c => `<option>${esc(c)}</option>`).join('');
+  table(rows);
+  anim = false;
+}
+
+// area/line chart with gaps at null values → { svg, mn, mx }
+function area(v, h) {
+  const n = v.length, xs = v.filter(x => x != null), mx = Math.max(...xs, 1), mn = Math.min(...xs, 0), segs = [];
+  const y = x => (h - 8 - (x - mn) / (mx - mn || 1) * (h - 28)).toFixed(1); let cur = null;
+  v.forEach((x, i) => { if (x == null) { cur = null; return } if (!cur) segs.push(cur = []); cur.push([((i + .5) / n * 1000).toFixed(1), y(x)]) });
+  const L = s => s.map((p, i) => (i ? 'L' : 'M') + p.join(' ')).join('');
+  return { mn, mx, svg: `<svg viewBox="0 0 1000 ${h}" preserveAspectRatio="none" height="${h}"><defs><linearGradient id="g${h}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#7c5cff" stop-opacity=".5"/><stop offset="1" stop-color="#7c5cff" stop-opacity="0"/></linearGradient></defs>${segs.map(s => `<path d="${L(s)}L${s.at(-1)[0]} ${h}L${s[0][0]} ${h}Z" fill="url(#g${h})"/><path d="${L(s)}" fill="none" stroke="#00e5ff" stroke-width="2" vector-effect="non-scaling-stroke"/>`).join('')}</svg>` };
+}
+function tick() {
+  const l = snaps.at(-1); if (!l) return;
+  const d = Date.now() / 1e3 - l.ts, late = !DEMO && d > 90;
+  $('#age').textContent = `${late ? 'delayed' : 'live'}${fbErr && !DEMO ? ' · history error: ' + fbErr : ''}`;
+  $('.live .dot').style.background = late ? 'var(--warn)' : '';
+}
+setInterval(tick, 1000);
+
+const evRow = e => {
+  const c = { new: '#00e5ff', config: '#7c5cff', pause: '#ff8a3d' }[e.kind] ?? (e.kind === 'status' ? SC[S.indexOf(e.to)] ?? SC[4] : TC[T.indexOf(e.to)] ?? TC[3]);
+  const rc = e.after?.rc ? ` · reason codes: <span class="mono">${esc((e.before?.rc || []).join(', ') || 'none')} → ${esc(e.after.rc.join(', ') || 'none')}</span>` : '';
+  const txt = e.kind === 'new' ? 'new pool detected'
+    : e.kind === 'config' ? `config changed: <span class="mono">${esc(e.from)}</span>${rc}`
+    : e.kind === 'pause' ? `pause level: <span class="mono">${esc(e.from)} → ${esc(e.to)}</span>`
+    : `${e.kind} changed: <span class="mono">${esc(e.from)} → ${esc(e.to)}</span>`;
+  return `<div class="ev" data-a="${esc(e.a)}"><span class="dot" style="background:${c}"></span><div><b>${esc(e.pair)}</b> <span class="mut mono">${esc(e.chain)} · ${short(e.a)}</span><br>${txt}</div><time>${ago(e.ts)}</time></div>`;
+};
+
+const tbl = (cols, rows) => !rows.length ? '<div class="empty">Nothing matches.</div>' :
+  `<table><thead><tr>${cols.map(c => `<th data-k="${c.k}" class="${c.k === st.key ? 'on' : ''}">${c.t}${c.k === st.key ? (st.dir > 0 ? ' ↑' : ' ↓') : ''}</th>`).join('')}</tr></thead><tbody>${rows.map(r => `<tr${r.a ? ` data-a="${r.a}"` : ''}>${cols.map(c => `<td>${c.f(r)}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+const upBar = u => `<span class="bar"><i style="width:${u}%;background:${u >= 99 ? SC[0] : u >= 90 ? SC[2] : SC[1]}"></i></span>${u.toFixed(2)}%`;
+const sortRows = r => r.sort((a, b) => ((a[st.key] ?? -1) > (b[st.key] ?? -1) ? 1 : -1) * st.dir);
+
+// slice a list to the current page and draw the pager (hidden when everything fits on one page)
+function paged(list) {
+  const n = list.length, pages = Math.max(1, Math.ceil(n / st.size));
+  st.page = Math.min(st.page, pages - 1);
+  const a = st.page * st.size, nums = [...new Set([0, st.page - 1, st.page, st.page + 1, pages - 1])].filter(i => i >= 0 && i < pages).sort((x, y) => x - y);
+  const btn = (l, i, on, dis) => `<button data-p="${i}"${dis ? ' disabled' : ''}${on ? ' class="on"' : ''}>${l}</button>`;
+  let mid = '', last = -1;
+  nums.forEach(i => { if (i - last > 1) mid += '<span class="gap">…</span>'; mid += btn(i + 1, i, i === st.page); last = i });
+  $('#pager').innerHTML = n <= 10 ? '' : `<span class="mut mono">${a + 1}–${Math.min(a + st.size, n)} of ${n}</span><div class="pg">${btn('‹', st.page - 1, 0, st.page === 0)}${mid}${btn('›', st.page + 1, 0, st.page >= pages - 1)}</div><select id="size">${[10, 25, 50, 100].map(v => `<option value="${v}"${v === st.size ? ' selected' : ''}>${v} / page</option>`).join('')}</select>`;
+  return list.slice(a, a + st.size);
+}
+function table(rows = stats()) {
+  const q = st.q.toLowerCase(), f = r => (!st.chain || r.chain === st.chain) && (!q || (r.pair + r.a + (r.pp || '')).toLowerCase().includes(q));
+  let html;
+  $('#tools').style.display = st.tab === 'ev' ? 'none' : 'flex';
+  if (st.tab === 'pools') {
+    html = tbl([
+      { k: 'pair', t: 'Pool', f: r => `<b>${esc(r.pair)}</b> <span class="mut mono">${esc(r.chain)} · ${short(r.a)}</span>` },
+      { k: 'cs', t: 'Status', f: r => pill(S[r.cs], SC[r.cs]) },
+      { k: 'ct', t: 'Tier', f: r => pill(T[r.ct], TC[r.ct]) },
+      { k: 'now', t: 'Spread', f: r => `<span class="mono">${fx(r.now)}</span> <span class="mut">bps</span>` },
+      { k: 'sd', t: 'Avg / σ', f: r => `<span class="mono mut">${fx(r.avg)} / ${fx(r.sd)}</span>` },
+      { k: 'p95', t: 'Trend', f: r => spark(r.sp) },
+      { k: 'up', t: 'Uptime', f: r => upBar(r.up) },
+      { k: 'ep', t: 'Outages', f: r => r.ep ? `<span style="color:${SC[1]}">${r.ep}</span>` : '<span class="mut">0</span>' },
+      { k: 'tc', t: 'Tier Δ', f: r => r.tc || '<span class="mut">0</span>' },
+      { k: 'vol', t: 'Vol 24h', f: r => `<span class="mono">${usd(r.vol)}</span>` },
+      { k: 'tv', t: 'TVL', f: r => `<span class="mono">${usd(r.tv)}</span>` },
+    ], paged(sortRows(rows.filter(f))));
+  } else if (st.tab === 'prov') {
+    const G = {};
+    rows.filter(f).forEach(r => { const g = G[r.pp] ??= { pp: r.pp, type: r.pt, pools: 0, n: 0, ok: 0, ep: 0, down: 0, tv: 0 }; g.pools++; g.n += r.n; g.ok += r.ok; g.ep += r.ep; g.down += r.cs === 1; g.tv += r.tv });
+    html = tbl([
+      { k: 'pp', t: 'Price provider', f: r => `<span class="mono">${short(r.pp)}</span>` },
+      { k: 'type', t: 'Type', f: r => `<span class="mut">${esc(r.type || '—')}</span>` },
+      { k: 'pools', t: 'Pools', f: r => r.pools },
+      { k: 'down', t: 'Status', f: r => r.down ? pill(`${r.down} feed_down`, SC[1]) : pill('healthy', SC[0]) },
+      { k: 'up', t: 'Uptime', f: r => upBar(r.up) },
+      { k: 'ep', t: 'Outages', f: r => r.ep ? `<span style="color:${SC[1]}">${r.ep}</span>` : '<span class="mut">0</span>' },
+      { k: 'tv', t: 'TVL', f: r => `<span class="mono">${usd(r.tv)}</span>` },
+    ], paged(sortRows(Object.values(G).map(g => ({ ...g, up: g.n ? g.ok / g.n * 100 : 0 })))));
+  } else {
+    const ev = paged(events);
+    html = ev.length ? ev.map(evRow).join('') : '<div class="empty">No changes recorded yet.</div>';
+  }
+  $('#out').innerHTML = html;
+  $('#out').querySelectorAll('th').forEach(th => th.onclick = () => { st.dir = st.key === th.dataset.k ? -st.dir : -1; st.key = th.dataset.k; st.page = 0; table(rows) });
+}
+
+// ───────── UI wiring ─────────
+$('#q').oninput = e => { st.q = e.target.value; st.page = 0; table() };
+$('#pager').onclick = e => { const b = e.target.closest('button[data-p]'); if (!b || b.disabled) return; st.page = +b.dataset.p; table(); $('#tabs').scrollIntoView({ behavior: 'smooth', block: 'start' }) };
+$('#pager').onchange = e => { if (e.target.id === 'size') { st.size = +e.target.value; st.page = 0; table() } };
+$('#chain').onchange = e => { st.chain = e.target.value; st.page = 0; table() };
+
+// ───────── pool history modal ─────────
+$('#out').onclick = e => { const r = e.target.closest('[data-a]'); if (r) { sel = r.dataset.a.toLowerCase(); history.replaceState(null, '', '#' + sel); modal() } };
+const closeModal = () => { sel = null; $('#modal').hidden = true; history.replaceState(null, '', location.pathname + location.search) };
+$('#modal').onclick = e => { if (e.target.id === 'modal') closeModal() };
+addEventListener('keydown', e => e.key === 'Escape' && closeModal());
+
+function cfgHtml(c) {
+  const e6 = n => n == null ? '—' : (n / 1e4).toFixed(2) + '%', e8 = n => n == null ? '—' : (n / 1e6).toFixed(3) + '%';
+  const pd = c.priceProviderDetails || {}, sl = c.extensionDetails?.stopLoss, rc = c.classificationSummary?.reasonCodes || [];
+  const kv = [
+    ['Tokens', `${esc(c.token0Symbol || '?')} / ${esc(c.token1Symbol || '?')}<br><span class="mut mono">${short(c.token0)} · ${short(c.token1)}</span>`],
+    ['Admin', `${esc(c.adminUsername || short(c.admin))}${c.verifiedAdmin ? ' ✓' : ''}`],
+    ['Spread fee (protocol / admin)', `${e6(c.spreadProtocolFeeE6)} / ${e6(c.spreadAdminFeeE6)}`],
+    ['Notional fee (protocol / admin)', `${e8(c.protocolNotionalFeeE8)} / ${e8(c.adminNotionalFeeE8)}`],
+    ['Price provider', `${esc(pd.providerType || '—')}<br><span class="mut mono">${short(c.priceProviderAddress)}</span>`],
+    ['Locked pricing', c.lockedPricing ? 'yes' : 'no'],
+    ['Extensions', `${(c.extensions || []).length}${sl ? ` · stop-loss ${e6(+sl.drawdownE6)}` : ''}`],
+    ['Tier reason codes', rc.length ? `<span class="mono" style="font-size:12px">${esc(rc.join(', '))}</span>` : 'none'],
+    ['Created', c.createdTimestamp ? clock(c.createdTimestamp) : '—'],
+  ];
+  return `<div class="kv">${kv.map(([k, v]) => `<div><small>${k}</small>${v}</div>`).join('')}</div>`;
+}
+function modal() {
+  const m = $('#modal'); if (!sel || !snaps.length) { m.hidden = true; return }
+  const wasHidden = m.hidden; m.hidden = false;
+  const r = stats().find(x => x.a === sel), info = reg.pools?.[sel] || {}, n = snaps.length, ser = snaps.map(s => s.p[sel] || null);
+  const strip = f => `<svg viewBox="0 0 1000 22" preserveAspectRatio="none" height="22">${ser.map((v, i) => `<rect x="${(i * 1000 / n).toFixed(2)}" width="${Math.max(1000 / n - .8, .5).toFixed(2)}" height="22" rx="2" fill="${v ? f(v) : '#1a1d36'}"/>`).join('')}</svg>`;
+  const mini = (l, v) => `<div><small>${l}</small><b>${v}</b></div>`;
+  const evs = events.filter(e => e.a === sel).slice(0, 25);
+  const c = DEMO ? demoCfg(sel) : FULL[sel], cfgBlock = c ? `<div class="lbl">Pool configuration</div>${cfgHtml(c)}` : '';
+  m.firstElementChild.innerHTML = `
+    <div class="hd"><div><h2 style="font-size:24px">${esc(info.pair || 'Pool')} ${info.chain ? pill(info.chain, '#7c5cff') : ''}</h2>
+      <div class="mono mut" style="font-size:12px;margin-top:4px">${esc(sel)}<br>provider ${short(info.pp)}${info.pt ? ' · ' + esc(info.pt) : ''}</div></div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${r ? pill(S[r.cs], SC[r.cs]) + pill(T[r.ct], TC[r.ct]) + (r.pz ? pill('paused L' + r.pz, '#ff8a3d') : '') : ''}
+        <div class="seg" id="mrange">${[6, 24, 72].map(h => `<button data-h="${h}" class="${h === st.hours ? 'on' : ''}">${h}h</button>`).join('')}</div>
+        <button class="x" id="mx" aria-label="Close">✕</button></div></div>
+    ${r ? `<div class="mini">${mini('Uptime', r.up.toFixed(2) + '%')}${mini('Outages', r.ep)}${mini('Avg spread', fx(r.avg) + ' bps')}${mini('P95 spread', fx(r.p95) + ' bps')}${mini('Tier changes', r.tc)}${mini('Volume 24h', usd(r.vol))}${mini('APR 7d', r.apr == null ? '—' : (r.apr / 100).toFixed(2) + '%')}${mini('TVL', usd(r.tv))}</div>` : '<div class="empty">This pool is not in the latest snapshot.</div>'}
+    <div class="lbl">Status history</div><div class="chart" id="m-st">${strip(v => SC[v[0]])}</div>
+    <div class="lbl">Tier history</div><div class="chart" id="m-ti">${strip(v => TC[v[1]])}</div>
+    <div class="lbl">Spread (bps)</div><div class="chart" id="m-sp"></div>
+    <div class="axis mono"><span>${clock(snaps[0].ts)}</span><span id="m-rng"></span><span>${clock(snaps.at(-1).ts)}</span></div>
+    <div class="lbl">Volume · rolling 24h</div><div class="chart" id="m-vo"></div><div class="axis mono"><span></span><span id="m-vr"></span><span></span></div>
+    <div class="lbl">TVL</div><div class="chart" id="m-tv"></div><div class="axis mono"><span></span><span id="m-tr"></span><span></span></div>
+    ${cfgBlock}
+    <div class="lbl">Change log</div>${evs.length ? evs.map(evRow).join('') : '<div class="empty">No status or tier changes recorded.</div>'}`;
+  const a = area(ser.map(v => v?.[2] ?? null), 140);
+  $('#m-sp').innerHTML = a.svg; $('#m-rng').textContent = `${fx(a.mn)} – ${fx(a.mx)} bps`;
+  const vo = area(ser.map(v => v?.[4] ?? null), 110), tv = area(ser.map(v => v?.[3] ?? null), 110);
+  $('#m-vo').innerHTML = vo.svg; $('#m-vr').textContent = `${usd(vo.mn)} – ${usd(vo.mx)}`;
+  $('#m-tv').innerHTML = tv.svg; $('#m-tr').textContent = `${usd(tv.mn)} – ${usd(tv.mx)}`;
+  const tip = s => { const v = s.p[sel]; return `<b>${clock(s.ts)}</b><br>` + (v ? `status: ${S[v[0]]}<br>tier: ${T[v[1]]}<br>spread: ${fx(v[2])} bps<br>vol 24h: ${usd(v[4] ?? 0)}<br>TVL: ${usd(v[3])}<br>APR 7d: ${v[5] == null ? '—' : (v[5] / 100).toFixed(2) + '%'}<br>pause: ${v[6] ?? 0}<br>px: ${v[7] ?? '—'} / ${v[8] ?? '—'}` : 'no data') };
+  ['#m-st', '#m-ti', '#m-sp', '#m-vo', '#m-tv'].forEach(id => hover($(id), tip));
+  $('#mx').onclick = closeModal;
+  $('#mrange').onclick = e => { const b = e.target.closest('button'); if (b) $(`#range button[data-h="${b.dataset.h}"]`).click() };
+  if (wasHidden) m.scrollTop = 0;
+}
+$('#tabs').onclick = e => { const b = e.target.closest('button'); if (!b) return; st.tab = b.dataset.t; st.key = { pools: 'tv', prov: 'tv', ev: '' }[st.tab]; st.dir = -1; st.page = 0; document.querySelectorAll('#tabs button').forEach(x => x.classList.toggle('on', x === b)); table() };
+$('#range').onclick = async e => { const b = e.target.closest('button'); if (!b) return; st.hours = +b.dataset.h; document.querySelectorAll('#range button').forEach(x => x.classList.toggle('on', x === b)); await refresh() };
+const io = new IntersectionObserver(es => es.forEach(e => e.isIntersecting && e.target.classList.add('in')), { threshold: .08 });
+document.querySelectorAll('.rv').forEach(el => io.observe(el));
+
+const refresh = reload;
+start().then(() => { const h = location.hash.slice(1).toLowerCase(); if (/^0x[0-9a-f]{40}$/.test(h)) { sel = h; modal() } });
+setInterval(() => { // simulate realtime ticks in demo mode
+  if (!DEMO || !demoOn) return;
+  const l = hist.at(-1); if (!l) return; l.ts = Math.floor(Date.now() / 1e3);
+  for (const a in l.p) { const v = l.p[a]; if (v[2] != null) v[2] = +Math.max(.05, v[2] * (1 + (Math.random() - .5) * .08)).toFixed(2) }
+  redraw();
+}, 4000);
+
+// ───────── animated network background ─────────
+(() => {
+  if (matchMedia('(prefers-reduced-motion:reduce)').matches) return;
+  const c = $('#net'), x = c.getContext('2d'); let W, H, N = [];
+  const rs = () => { W = c.width = innerWidth; H = c.height = innerHeight; N = Array.from({ length: Math.min(70, W / 22 | 0) }, () => ({ x: Math.random() * W, y: Math.random() * H, vx: (Math.random() - .5) * .3, vy: (Math.random() - .5) * .3 })) };
+  addEventListener('resize', rs); rs();
+  (function f() {
+    x.clearRect(0, 0, W, H);
+    N.forEach((a, i) => {
+      a.x = (a.x + a.vx + W) % W; a.y = (a.y + a.vy + H) % H;
+      x.fillStyle = 'rgba(0,229,255,.55)'; x.fillRect(a.x, a.y, 1.6, 1.6);
+      for (let j = i + 1; j < N.length; j++) { const b = N[j], d = Math.hypot(a.x - b.x, a.y - b.y); if (d < 130) { x.strokeStyle = `rgba(124,92,255,${.16 * (1 - d / 130)})`; x.beginPath(); x.moveTo(a.x, a.y); x.lineTo(b.x, b.y); x.stroke() } }
+    });
+    requestAnimationFrame(f);
+  })();
+})();
+
+// ───────── demo data (only used when CFG is empty) ─────────
+function demoCfg(a) {
+  const i = reg.pools[a], [b, q] = i.pair.split('/'), rc = ['stop_loss_mutable', 'feed_staleness_exceeded'];
+  return { token0Symbol: b, token1Symbol: q, token0: '0x' + 'c0'.repeat(20), token1: '0x' + 'a0'.repeat(20), admin: '0x' + 'ad'.repeat(20), adminUsername: 'demo-admin', verifiedAdmin: true,
+    spreadProtocolFeeE6: 150000, spreadAdminFeeE6: 200000, protocolNotionalFeeE8: 0, adminNotionalFeeE8: 0, lockedPricing: true, priceProviderAddress: i.pp,
+    priceProviderDetails: { providerType: i.pt }, extensions: ['0x1', '0x2'], extensionDetails: { stopLoss: { drawdownE6: '150000' } },
+    classificationSummary: { reasonCodes: a.endsWith('1d') ? rc.slice(0, 1) : [] }, createdTimestamp: Math.floor(Date.now() / 1e3) - 86400 * 21 };
+}
+function demo() {
+  const names = ['WETH/USDC', 'WBTC/USDC', 'cbBTC/WETH', 'USDT/USDC', 'WBNB/USDT', 'ETH/USDT', 'stETH/WETH', 'LINK/WETH', 'AAPL/USDC', 'TSLA/USDC', 'SOL/USDC', 'PEPE/WETH'];
+  const ch = ['ethereum', 'bsc', 'robinhood'], pr = Array.from({ length: 4 }, (_, i) => '0x' + (i + 1).toString(16).repeat(40).slice(0, 40));
+  const rg = { chains: ch, pools: {} }, pools = [], seed = n => { let s = n; return () => (s = (s * 16807) % 2147483647) / 2147483647 };
+  names.forEach((pair, i) => { const a = '0x' + (i + 17).toString(16).padStart(2, '0').repeat(20); pools.push({ a, base: 0.4 + (i % 5) * 1.3, tier: i % 7 == 3 ? 1 : i % 11 == 5 ? 2 : 0, pp: pr[i % 4], tv: 40e3 + i * 53e3 }); rg.pools[a] = { pair: names[i], chain: ch[i % 3], pp: pr[i % 4], pt: i % 3 ? 'anchored' : 'regular' } });
+  const now = Math.floor(Date.now() / 1e3), N = 432, rnd = seed(7), ss = [], evs = [];
+  for (let i = 0; i < N; i++) {
+    const ts = now - (N - 1 - i) * STEP * 60, p = {}, c = [0, 0, 0, 0, 0], k = [0, 0, 0, 0, 0]; let tvl = 0, vol = 0;
+    pools.forEach((o, j) => {
+      let s = 0; if (o.pp === pr[1] && ((i > 300 && i < 309) || (i > 90 && i < 94))) s = 1; if (j == 8 && i > 380 && i < 384) s = 2;
+      const t = o.tier == 1 && i > 250 ? 1 : j == 5 && i > 380 ? 2 : o.tier === 1 ? 0 : o.tier;
+      const sp = s ? null : +(o.base * (1 + .35 * Math.sin(i / 17 + j) + (rnd() - .5) * .4)).toFixed(2);
+      const tvn = Math.round(o.tv * (1 + Math.sin(i / 40 + j) * .06)), vl = Math.round(tvn * (1.2 + Math.sin(i / 25 + j * 2) * .5));
+      p[o.a] = [s, t, sp, tvn, vl, 600 + j * 150, i > 395 && j == 9 ? 1 : 0, 2700, 1]; c[s]++; k[t]++; tvl += tvn; vol += vl;
+    });
+    ss.push({ ts, n: pools.length, c, k, tvl, vol, p });
+  }
+  [['status', 'healthy', 'feed_down', 5, 3], ['status', 'feed_down', 'healthy', 5, 2], ['tier', 'green', 'yellow', 3, 190], ['tier', 'yellow', 'red', 5, 40], ['status', 'healthy', 'pool_refused', 8, 60], ['config', 'fee', null, 2, 120], ['pause', '0', '1', 9, 30]].forEach(([kind, from, to, j, m]) => {
+    const o = pools[j]; evs.push({ kind, from, to, a: o.a, pair: names[j], chain: ch[j % 3], ts: now - m * 600 });
+  });
+  return { reg: rg, snaps: ss.slice(-st.hours * 6), events: evs };
+}
+</script>
+</body>
+</html>

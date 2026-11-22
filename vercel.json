@@ -1,0 +1,3 @@
+{
+  "rewrites": [{ "source": "/metric-api/:path*", "destination": "https://api.metric.xyz/public/v1/:path*" }]
+}
