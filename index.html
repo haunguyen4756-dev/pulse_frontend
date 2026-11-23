@@ -124,7 +124,7 @@ footer{margin:50px 0 30px;color:var(--mut);font-size:12px;text-align:center}foot
 
   <section class="card rv">
     <div class="hd"><h2>Network health<span id="rng-note"></span></h2>
-      <div class="seg" id="range"><button data-h="6">6h</button><button data-h="24" class="on">24h</button><button data-h="72">72h</button></div></div>
+      <div class="seg" id="range"><button data-h="6">6h</button><button data-h="24" class="on">24h</button><button data-h="72">72h</button><button data-h="0">All</button></div></div>
     <div class="chart" id="tl"></div>
     <div class="axis mono"><span id="t0"></span><span>% of pools healthy per snapshot</span><span id="t1"></span></div>
   </section>
@@ -258,11 +258,15 @@ async function initStore() {
     const db = f.getFirestore(initializeApp(CFG));
     return {
       mode: 'shared',
-      watchHist: (h, cb, err) => f.onSnapshot(f.query(f.collection(db, 'snapshots'), f.orderBy('ts', 'desc'), f.limit(h * 3600 / BUCKET)), q => cb(q.docs.map(d => d.data()).reverse()), err),
+      watchHist: (h, cb, err) => f.onSnapshot(
+        // filter by TIME window (not by doc count) so the range always covers h hours, even if the backend writes more often than every BUCKET seconds
+        f.query(f.collection(db, 'snapshots'), ...(h ? [f.where('ts', '>=', Math.floor(Date.now() / 1e3) - h * 3600)] : []), f.orderBy('ts', 'asc'), f.limit(h ? 5000 : 100000)), // h = 0 -> ALL history
+        q => { const m = new Map(); q.docs.forEach(d => { const x = d.data(); m.set(Math.floor(x.ts / BUCKET), x) }); cb([...m.values()]) }, // keep 1 snapshot per bucket (latest)
+        err),
       save: x => f.setDoc(f.doc(db, 'snapshots', String(x.ts)), x),   // create-only bucket doc: first writer per 10 min wins
       has: async ts => (await f.getDoc(f.doc(db, 'snapshots', String(ts)))).exists(),
       addEvents: evs => Promise.all(evs.map(({ id, ...e }) => f.setDoc(f.doc(db, 'events', id), e).catch(() => {}))),
-      onEvents: cb => f.onSnapshot(f.query(f.collection(db, 'events'), f.orderBy('ts', 'desc'), f.limit(300)), q => cb(q.docs.map(d => d.data())), console.error),
+      onEvents: cb => f.onSnapshot(f.query(f.collection(db, 'events'), f.orderBy('ts', 'desc'), f.limit(5000)), q => cb(q.docs.map(d => d.data())), console.error),
     };
   }
   const open = await new Promise((res, rej) => { const r = indexedDB.open('metric-pulse', 1); r.onupgradeneeded = () => { r.result.createObjectStore('snaps', { keyPath: 'ts' }); r.result.createObjectStore('events', { keyPath: 'id' }) }; r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error) });
@@ -270,10 +274,10 @@ async function initStore() {
   run('snaps', 'readwrite', o => o.delete(IDBKeyRange.upperBound(Date.now() / 1e3 - 14 * 86400))).catch(() => {});
   return {
     mode: 'local',
-    loadHist: h => run('snaps', 'readonly', o => o.getAll(IDBKeyRange.lowerBound(Date.now() / 1e3 - h * 3600))),
+    loadHist: h => run('snaps', 'readonly', o => o.getAll(IDBKeyRange.lowerBound(h ? Date.now() / 1e3 - h * 3600 : 0))),
     save: x => run('snaps', 'readwrite', o => o.put(x)),
     addEvents: evs => run('events', 'readwrite', o => { evs.forEach(e => o.put(e)) }),
-    loadEvents: async () => (await run('events', 'readonly', o => o.getAll())).sort((a, b) => b.ts - a.ts).slice(0, 300),
+    loadEvents: async () => (await run('events', 'readonly', o => o.getAll())).sort((a, b) => b.ts - a.ts).slice(0, 5000),
   };
 }
 const memStore = { mode: 'memory', loadHist: async () => [], save: async () => {}, addEvents: async () => {}, loadEvents: async () => [] };
@@ -294,10 +298,10 @@ async function record(snap) {
     if (o[2] !== z1) add('pause', String(o[2]), String(z1));
   }
   prev = cur;
-  if (evs.length) { if (store.mode !== 'shared') events = [...evs, ...events].slice(0, 300); store.addEvents(evs).catch(() => {}) }
+  if (evs.length) { if (store.mode !== 'shared') events = [...evs, ...events].slice(0, 5000); store.addEvents(evs).catch(() => {}) }
   if (!wrote.has(b) && (last?.ts ?? 0) < b) {
     wrote.add(b); const x = { ...snap, ts: b };
-    if (store.mode !== 'shared') { hist.push(x); while (hist.length > st.hours * 3600 / BUCKET) hist.shift() }
+    if (store.mode !== 'shared') { hist.push(x); while (st.hours && hist.length > st.hours * 3600 / BUCKET) hist.shift() }
     store.save(x).then(() => { fbErr = null }).catch(async e => { // denied because another visitor already wrote this bucket is normal
       if (store.has && await store.has(b).catch(() => true)) return;
       fbErr = e.code || e.message; console.warn('Firebase write failed:', fbErr); tick();
@@ -317,7 +321,7 @@ const redraw = () => { if (snaps.length) { render(); modal() } };
 
 function useDemo(msg) {
   DEMO = true;
-  if (!demoOn || hist.length !== st.hours * 6) { ({ reg, snaps: hist, events } = demo()); live = null; demoOn = true }
+  if (!demoOn || hist.length !== (st.hours || 72) * 6) { ({ reg, snaps: hist, events } = demo()); live = null; demoOn = true }
   merge(); $('#demo').textContent = msg; $('#demo').hidden = false;
 }
 async function reload() { // range change
@@ -376,7 +380,7 @@ function render() {
   $('#rng-note').textContent = `${snaps.length} snapshots`;
   $('#kpis').innerHTML = [
     ['Pools tracked', tot, 'across ' + (reg.chains?.length || '–') + ' chains', 0],
-    ['feed_down now', last.c[1], `${inc} outage episode${inc == 1 ? '' : 's'} in ${st.hours}h`, 1],
+    ['feed_down now', last.c[1], `${inc} outage episode${inc == 1 ? '' : 's'} in ${st.hours ? st.hours + 'h' : 'all history'}`, 1],
     ['Tier changes', tc, `${last.k[0]} green · ${last.k[1]} yellow · ${last.k[2]} red`, 2],
     ['Tracked TVL', last.tvl, `24h volume ${usd(last.vol || 0)}`, 3],
   ].map(([l, v, s, i]) => `<div class="card kpi"><small>${l}</small><b data-v="${v}" data-i="${i}">0</b><em>${s}</em></div>`).join('');
@@ -524,7 +528,7 @@ function modal() {
     <div class="hd"><div><h2 style="font-size:24px">${esc(info.pair || 'Pool')} ${info.chain ? pill(info.chain, '#7c5cff') : ''}</h2>
       <div class="mono mut" style="font-size:12px;margin-top:4px">${esc(sel)}<br>provider ${short(info.pp)}${info.pt ? ' · ' + esc(info.pt) : ''}</div></div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${r ? pill(S[r.cs], SC[r.cs]) + pill(T[r.ct], TC[r.ct]) + (r.pz ? pill('paused L' + r.pz, '#ff8a3d') : '') : ''}
-        <div class="seg" id="mrange">${[6, 24, 72].map(h => `<button data-h="${h}" class="${h === st.hours ? 'on' : ''}">${h}h</button>`).join('')}</div>
+        <div class="seg" id="mrange">${[6, 24, 72, 0].map(h => `<button data-h="${h}" class="${h === st.hours ? 'on' : ''}">${h || 'All'}${h ? 'h' : ''}</button>`).join('')}</div>
         <button class="x" id="mx" aria-label="Close">✕</button></div></div>
     ${r ? `<div class="mini">${mini('Uptime', r.up.toFixed(2) + '%')}${mini('Outages', r.ep)}${mini('Avg spread', fx(r.avg) + ' bps')}${mini('P95 spread', fx(r.p95) + ' bps')}${mini('Tier changes', r.tc)}${mini('Volume 24h', usd(r.vol))}${mini('APR 7d', r.apr == null ? '—' : (r.apr / 100).toFixed(2) + '%')}${mini('TVL', usd(r.tv))}</div>` : '<div class="empty">This pool is not in the latest snapshot.</div>'}
     <div class="lbl">Status history</div><div class="chart" id="m-st">${strip(v => SC[v[0]])}</div>
@@ -605,7 +609,7 @@ function demo() {
   [['status', 'healthy', 'feed_down', 5, 3], ['status', 'feed_down', 'healthy', 5, 2], ['tier', 'green', 'yellow', 3, 190], ['tier', 'yellow', 'red', 5, 40], ['status', 'healthy', 'pool_refused', 8, 60], ['config', 'fee', null, 2, 120], ['pause', '0', '1', 9, 30]].forEach(([kind, from, to, j, m]) => {
     const o = pools[j]; evs.push({ kind, from, to, a: o.a, pair: names[j], chain: ch[j % 3], ts: now - m * 600 });
   });
-  return { reg: rg, snaps: ss.slice(-st.hours * 6), events: evs };
+  return { reg: rg, snaps: ss.slice(-(st.hours || 72) * 6), events: evs };
 }
 </script>
 </body>
