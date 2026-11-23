@@ -258,7 +258,8 @@ async function initStore() {
     const u = 'https://www.gstatic.com/firebasejs/10.14.1/';
     const [{ initializeApp }, f] = await Promise.all([import(u + 'firebase-app.js'), import(u + 'firebase-firestore.js')]);
     const db = f.getFirestore(initializeApp(CFG));
-    const cdb = await new Promise(res => { try { const q = indexedDB.open('metric-pulse-cache', 1); q.onupgradeneeded = () => { q.result.createObjectStore('snaps', { keyPath: 'ts' }); q.result.createObjectStore('meta') }; q.onsuccess = () => res(q.result); q.onerror = () => res(null) } catch { res(null) } });
+    const cdb = await new Promise(res => { setTimeout(() => res(null), 2000); try { const q = indexedDB.open('metric-pulse-cache', 1); q.onupgradeneeded = () => { q.result.createObjectStore('snaps', { keyPath: 'ts' }); q.result.createObjectStore('meta') }; q.onsuccess = () => res(q.result); q.onerror = () => res(null) } catch { res(null) } });
+    const cput = (items) => cdb ? new Promise(res => { try { const t = cdb.transaction('snaps', 'readwrite'), o = t.objectStore('snaps'); items.forEach(x => o.put(x)); t.oncomplete = () => res(true); t.onerror = t.onabort = () => res(false) } catch { res(false) } }) : Promise.resolve(false);
     const crun = (n, m, fn) => cdb ? new Promise(res => { try { const t = cdb.transaction(n, m), q = fn(t.objectStore(n)); t.oncomplete = () => res(q?.result); t.onerror = t.onabort = () => res(undefined) } catch { res(undefined) } }) : Promise.resolve(undefined);
     // events: newest EVPAGE live, older pages on demand (cursor paging)
     const EVPAGE = 200, evAll = new Map(); let evTail = null, evDone = false;
@@ -280,14 +281,14 @@ async function initStore() {
             if (cached.length && covered) emit();                       // instant first paint from cache
             if (!covered) {                                             // fetch only the part the cache does not hold yet
               const cons = [f.where('ts', '>=', since), ...(cover != null ? [f.where('ts', '<', cover)] : [])];
-              const old = (await f.getDocs(f.query(f.collection(db, 'snapshots'), ...cons, f.orderBy('ts', 'asc')))).docs.map(d => d.data());
+              const old = (await f.getDocs(f.query(f.collection(db, 'snapshots'), ...cons, f.orderBy('ts', 'asc'), f.limit(100000)))).docs.map(d => d.data());
               old.forEach(x => rows.set(x.ts, x)); if (dead) return;
-              await crun('snaps', 'readwrite', o => { old.forEach(x => o.put(x)) }); await crun('meta', 'readwrite', o => o.put(since, 'coverFrom'));
+              if (old.length < 100000 && await cput(old)) await crun('meta', 'readwrite', o => o.put(since, 'coverFrom'));
             }
             emit(); let last = since - 1; for (const k of rows.keys()) if (k > last) last = k;
             off = f.onSnapshot(f.query(f.collection(db, 'snapshots'), f.where('ts', '>', last), f.orderBy('ts', 'asc')), q => { // live: new docs only
               const add = q.docChanges().filter(c => c.type !== 'removed').map(c => c.doc.data()); if (!add.length) return;
-              add.forEach(x => rows.set(x.ts, x)); crun('snaps', 'readwrite', o => { add.forEach(x => o.put(x)) }); emit();
+              add.forEach(x => rows.set(x.ts, x)); cput(add); emit();
             }, err);
           } catch (e) { err(e) }
         })();
@@ -297,6 +298,7 @@ async function initStore() {
       has: async ts => (await f.getDoc(f.doc(db, 'snapshots', String(ts)))).exists(),
       addEvents: evs => Promise.all(evs.map(({ id, ...e }) => f.setDoc(f.doc(db, 'events', id), e).catch(() => {}))),
       onEvents: cb => f.onSnapshot(f.query(f.collection(db, 'events'), f.orderBy('ts', 'desc'), f.limit(EVPAGE)), q => { evTail ??= q.docs.at(-1) ?? null; if (q.size < EVPAGE) evDone = true; q.docs.forEach(d => evAll.set(d.id, { ...d.data(), _id: d.id })); cb(evList()) }, console.error),
+      poolEvents: async a => (await f.getDocs(f.query(f.collection(db, 'events'), f.where('a', '==', a), f.limit(500)))).docs.map(d => ({ ...d.data(), _id: d.id })),
       canMore: () => !evDone,
       moreEvents: async () => { if (evDone || !evTail) return evList(); const q = await f.getDocs(f.query(f.collection(db, 'events'), f.orderBy('ts', 'desc'), f.startAfter(evTail), f.limit(EVPAGE))); q.docs.forEach(d => evAll.set(d.id, { ...d.data(), _id: d.id })); if (q.size) evTail = q.docs.at(-1); if (q.size < EVPAGE) evDone = true; return evList() },
     };
@@ -351,7 +353,12 @@ const loadH = async () => store.mode === 'shared' ? watchHist() : (hist = await 
 const MAXPTS = 2000; // very long ranges ("All") are thinned to ~2000 points so charts stay smooth; the newest point is always kept
 const decim = a => { if (a.length <= MAXPTS) return a; const k = Math.ceil(a.length / MAXPTS), o = []; for (let i = a.length - 1; i >= 0; i -= k) o.push(a[i]); return o.reverse() };
 const merge = () => { snaps = decim(live && live.ts > (hist.at(-1)?.ts ?? 0) ? [...hist, live] : hist) };
-let evBusy = false, mpage = 0; const MSIZE = 10;
+let evBusy = false, mpage = 0; const MSIZE = 10, pev = new Map();
+function poolLog(a) { // this pool's own history (fetched on open) merged with the recent global events, newest first
+  const m = new Map(); [...(pev.get(a) || []), ...events.filter(e => e.a === a)].forEach(e => m.set(e._id ?? e.id ?? `${e.ts}_${e.kind}_${e.from}_${e.to}`, e));
+  return [...m.values()].sort((x, y) => y.ts - x.ts);
+}
+function loadPoolEv(a) { if (!a || pev.has(a) || !store?.poolEvents) return; pev.set(a, []); store.poolEvents(a).then(l => { pev.set(a, l); if (sel === a) mlog() }).catch(e => { console.error(e); pev.delete(a) }) }
 const moreBtn = () => store?.canMore?.() ? `<button class="more" data-more>${evBusy ? 'Loading…' : 'Load older events'}</button>` : '';
 async function moreEv() { if (evBusy || !store?.moreEvents) return; evBusy = true; redraw(); try { events = await store.moreEvents() } catch (e) { console.error(e) } evBusy = false; redraw() }
 const redraw = () => { if (snaps.length) { render(); modal() } };
@@ -555,7 +562,7 @@ function cfgHtml(c) {
 }
 function mlog() { // paginated change log of the selected pool
   const box = $('#m-log'); if (!box) return;
-  const all = events.filter(e => e.a === sel), n = all.length, pages = Math.max(1, Math.ceil(n / MSIZE)); mpage = Math.min(mpage, pages - 1);
+  const all = poolLog(sel), n = all.length, pages = Math.max(1, Math.ceil(n / MSIZE)); mpage = Math.min(mpage, pages - 1);
   const a = mpage * MSIZE, btn = (l, i, on, dis) => `<button data-mp="${i}"${dis ? ' disabled' : ''}${on ? ' class="on"' : ''}>${l}</button>`;
   const nums = [...new Set([0, mpage - 1, mpage, mpage + 1, pages - 1])].filter(i => i >= 0 && i < pages).sort((x, y) => x - y);
   let mid = '', last = -1; nums.forEach(i => { if (i - last > 1) mid += '<span class="gap">…</span>'; mid += btn(i + 1, i, i === mpage); last = i });
@@ -585,7 +592,7 @@ function modal() {
     <div class="lbl">TVL</div><div class="chart" id="m-tv"></div><div class="axis mono"><span></span><span id="m-tr"></span><span></span></div>
     ${cfgBlock}
     <div class="lbl">Change log</div><div id="m-log"></div>`;
-  mlog(); $('#m-log').onclick = e => { if (e.target.closest('[data-more]')) return moreEv(); const b = e.target.closest('button[data-mp]'); if (b && !b.disabled) { mpage = +b.dataset.mp; mlog() } };
+  mlog(); loadPoolEv(sel); $('#m-log').onclick = e => { if (e.target.closest('[data-more]')) return moreEv(); const b = e.target.closest('button[data-mp]'); if (b && !b.disabled) { mpage = +b.dataset.mp; mlog() } };
   const a = area(ser.map(v => v?.[2] ?? null), 140);
   $('#m-sp').innerHTML = a.svg; $('#m-rng').textContent = `${fx(a.mn)} – ${fx(a.mx)} bps`;
   const vo = area(ser.map(v => v?.[4] ?? null), 110), tv = area(ser.map(v => v?.[3] ?? null), 110);
