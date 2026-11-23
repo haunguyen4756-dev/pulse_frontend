@@ -434,7 +434,7 @@ function render() {
   const n = snaps.length, bw = 1000 / n;
   $('#tl').innerHTML = `<svg viewBox="0 0 1000 64" preserveAspectRatio="none" height="64">${snaps.map((s, i) => {
     const p = s.c[0] / (s.n || 1) * 100, h = 14 + p * .5;
-    return `<rect x="${(i * bw).toFixed(2)}" y="${64 - h}" width="${Math.max(bw - 1, .6).toFixed(2)}" height="${h}" rx="1.5" fill="${p >= 99 ? SC[0] : p >= 90 ? SC[2] : SC[1]}" opacity=".9"/>`;
+    return `<rect x="${(i * bw).toFixed(2)}" y="${64 - h}" width="${Math.max(bw - 1, .6).toFixed(2)}" height="${h}" rx="1.5" fill="${p >= 95 ? SC[0] : p >= 80 ? SC[2] : SC[1]}" opacity=".9"/>`;
   }).join('')}</svg>`;
   hover($('#tl'), s => `<b>${clock(s.ts)}</b><br>${S.map((x, i) => s.c[i] ? `<span style="color:${SC[i]}">●</span> ${x}: ${s.c[i]}` : '').filter(Boolean).join('<br>')}`);
   $('#t0').textContent = clock(snaps[0].ts); $('#t1').textContent = clock(last.ts);
