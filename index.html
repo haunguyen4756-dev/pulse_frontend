@@ -281,9 +281,16 @@ async function initStore() {
             if (cached.length && covered) emit();                       // instant first paint from cache
             if (!covered) {                                             // fetch only the part the cache does not hold yet
               const cons = [f.where('ts', '>=', since), ...(cover != null ? [f.where('ts', '<', cover)] : [])];
-              const old = (await f.getDocs(f.query(f.collection(db, 'snapshots'), ...cons, f.orderBy('ts', 'asc'), f.limit(100000)))).docs.map(d => d.data());
+              // Firestore caps limit() at 10000 per query, so read in pages of PAGE docs using a cursor (up to CAP docs total)
+              const PAGE = 5000, CAP = 100000, old = []; let cur = null, full = false;
+              while (old.length < CAP) {
+                const q = await f.getDocs(f.query(f.collection(db, 'snapshots'), ...cons, f.orderBy('ts', 'asc'), ...(cur ? [f.startAfter(cur)] : []), f.limit(PAGE)));
+                q.docs.forEach(d => old.push(d.data())); cur = q.docs.at(-1);
+                if (q.size < PAGE) { full = true; break }
+                if (dead) return;
+              }
               old.forEach(x => rows.set(x.ts, x)); if (dead) return;
-              if (old.length < 100000 && await cput(old)) await crun('meta', 'readwrite', o => o.put(since, 'coverFrom'));
+              if (full && await cput(old)) await crun('meta', 'readwrite', o => o.put(since, 'coverFrom'));
             }
             emit(); let last = since - 1; for (const k of rows.keys()) if (k > last) last = k;
             off = f.onSnapshot(f.query(f.collection(db, 'snapshots'), f.where('ts', '>', last), f.orderBy('ts', 'asc')), q => { // live: new docs only
