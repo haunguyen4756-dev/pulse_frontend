@@ -73,6 +73,8 @@ select option{background:#0c0e1f}
 .pg button:disabled{opacity:.35;cursor:default}
 .pg .gap{color:var(--mut);padding:0 2px}
 .pager select{padding:7px 10px}
+.more{height:34px;padding:0 14px;border-radius:10px;background:var(--card);border:1px solid var(--line);color:var(--c);cursor:pointer;font:inherit;transition:.2s}
+.more:hover{border-color:var(--c);color:#fff}
 table{width:100%;border-collapse:collapse;font-size:13.5px}
 th{color:var(--mut);font-weight:500;text-align:left;padding:10px 12px;font-size:11px;letter-spacing:1.2px;text-transform:uppercase;cursor:pointer;white-space:nowrap;user-select:none}
 th.on{color:var(--c)}
@@ -256,17 +258,47 @@ async function initStore() {
     const u = 'https://www.gstatic.com/firebasejs/10.14.1/';
     const [{ initializeApp }, f] = await Promise.all([import(u + 'firebase-app.js'), import(u + 'firebase-firestore.js')]);
     const db = f.getFirestore(initializeApp(CFG));
+    const cdb = await new Promise(res => { try { const q = indexedDB.open('metric-pulse-cache', 1); q.onupgradeneeded = () => { q.result.createObjectStore('snaps', { keyPath: 'ts' }); q.result.createObjectStore('meta') }; q.onsuccess = () => res(q.result); q.onerror = () => res(null) } catch { res(null) } });
+    const crun = (n, m, fn) => cdb ? new Promise(res => { try { const t = cdb.transaction(n, m), q = fn(t.objectStore(n)); t.oncomplete = () => res(q?.result); t.onerror = t.onabort = () => res(undefined) } catch { res(undefined) } }) : Promise.resolve(undefined);
+    // events: newest EVPAGE live, older pages on demand (cursor paging)
+    const EVPAGE = 200, evAll = new Map(); let evTail = null, evDone = false;
+    const evList = () => [...evAll.values()].sort((a, b) => b.ts - a.ts);
     return {
       mode: 'shared',
-      watchHist: (h, cb, err) => f.onSnapshot(
-        // filter by TIME window (not by doc count) so the range always covers h hours, even if the backend writes more often than every BUCKET seconds
-        f.query(f.collection(db, 'snapshots'), ...(h ? [f.where('ts', '>=', Math.floor(Date.now() / 1e3) - h * 3600)] : []), f.orderBy('ts', 'asc'), f.limit(h ? 5000 : 100000)), // h = 0 -> ALL history
-        q => { const m = new Map(); q.docs.forEach(d => { const x = d.data(); m.set(Math.floor(x.ts / BUCKET), x) }); cb([...m.values()]) }, // keep 1 snapshot per bucket (latest)
-        err),
+      // Snapshots are cached in IndexedDB: the page paints instantly from the cache, then only the NEW documents are read from Firestore
+      watchHist: (h, cb, err) => {
+        let dead = false, off = null; const rows = new Map(), win = () => h ? Math.floor(Date.now() / 1e3) - h * 3600 : 0;
+        const emit = () => { // newest snapshot per BUCKET inside the window, oldest -> newest
+          const lo = win(), m = new Map(); for (const [k, x] of rows) if (x.ts < lo) rows.delete(k);
+          [...rows.values()].sort((a, b) => a.ts - b.ts).forEach(x => m.set(Math.floor(x.ts / BUCKET), x)); cb([...m.values()]);
+        };
+        (async () => {
+          try {
+            const since = win(), cached = (await crun('snaps', 'readonly', o => o.getAll(IDBKeyRange.lowerBound(since)))) || [];
+            const cover = await crun('meta', 'readonly', o => o.get('coverFrom')), covered = cover != null && cover <= since;
+            cached.forEach(x => rows.set(x.ts, x)); if (dead) return;
+            if (cached.length && covered) emit();                       // instant first paint from cache
+            if (!covered) {                                             // fetch only the part the cache does not hold yet
+              const cons = [f.where('ts', '>=', since), ...(cover != null ? [f.where('ts', '<', cover)] : [])];
+              const old = (await f.getDocs(f.query(f.collection(db, 'snapshots'), ...cons, f.orderBy('ts', 'asc')))).docs.map(d => d.data());
+              old.forEach(x => rows.set(x.ts, x)); if (dead) return;
+              await crun('snaps', 'readwrite', o => { old.forEach(x => o.put(x)) }); await crun('meta', 'readwrite', o => o.put(since, 'coverFrom'));
+            }
+            emit(); let last = since - 1; for (const k of rows.keys()) if (k > last) last = k;
+            off = f.onSnapshot(f.query(f.collection(db, 'snapshots'), f.where('ts', '>', last), f.orderBy('ts', 'asc')), q => { // live: new docs only
+              const add = q.docChanges().filter(c => c.type !== 'removed').map(c => c.doc.data()); if (!add.length) return;
+              add.forEach(x => rows.set(x.ts, x)); crun('snaps', 'readwrite', o => { add.forEach(x => o.put(x)) }); emit();
+            }, err);
+          } catch (e) { err(e) }
+        })();
+        return () => { dead = true; off?.() };
+      },
       save: x => f.setDoc(f.doc(db, 'snapshots', String(x.ts)), x),   // create-only bucket doc: first writer per 10 min wins
       has: async ts => (await f.getDoc(f.doc(db, 'snapshots', String(ts)))).exists(),
       addEvents: evs => Promise.all(evs.map(({ id, ...e }) => f.setDoc(f.doc(db, 'events', id), e).catch(() => {}))),
-      onEvents: cb => f.onSnapshot(f.query(f.collection(db, 'events'), f.orderBy('ts', 'desc'), f.limit(5000)), q => cb(q.docs.map(d => d.data())), console.error),
+      onEvents: cb => f.onSnapshot(f.query(f.collection(db, 'events'), f.orderBy('ts', 'desc'), f.limit(EVPAGE)), q => { evTail ??= q.docs.at(-1) ?? null; if (q.size < EVPAGE) evDone = true; q.docs.forEach(d => evAll.set(d.id, { ...d.data(), _id: d.id })); cb(evList()) }, console.error),
+      canMore: () => !evDone,
+      moreEvents: async () => { if (evDone || !evTail) return evList(); const q = await f.getDocs(f.query(f.collection(db, 'events'), f.orderBy('ts', 'desc'), f.startAfter(evTail), f.limit(EVPAGE))); q.docs.forEach(d => evAll.set(d.id, { ...d.data(), _id: d.id })); if (q.size) evTail = q.docs.at(-1); if (q.size < EVPAGE) evDone = true; return evList() },
     };
   }
   const open = await new Promise((res, rej) => { const r = indexedDB.open('metric-pulse', 1); r.onupgradeneeded = () => { r.result.createObjectStore('snaps', { keyPath: 'ts' }); r.result.createObjectStore('events', { keyPath: 'id' }) }; r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error) });
@@ -316,7 +348,12 @@ function watchHist() { // shared mode: live subscription to snapshots/*
   });
 }
 const loadH = async () => store.mode === 'shared' ? watchHist() : (hist = await store.loadHist(st.hours).catch(() => []));
-const merge = () => { snaps = live && live.ts > (hist.at(-1)?.ts ?? 0) ? [...hist, live] : hist };
+const MAXPTS = 2000; // very long ranges ("All") are thinned to ~2000 points so charts stay smooth; the newest point is always kept
+const decim = a => { if (a.length <= MAXPTS) return a; const k = Math.ceil(a.length / MAXPTS), o = []; for (let i = a.length - 1; i >= 0; i -= k) o.push(a[i]); return o.reverse() };
+const merge = () => { snaps = decim(live && live.ts > (hist.at(-1)?.ts ?? 0) ? [...hist, live] : hist) };
+let evBusy = false, mpage = 0; const MSIZE = 10;
+const moreBtn = () => store?.canMore?.() ? `<button class="more" data-more>${evBusy ? 'Loading…' : 'Load older events'}</button>` : '';
+async function moreEv() { if (evBusy || !store?.moreEvents) return; evBusy = true; redraw(); try { events = await store.moreEvents() } catch (e) { console.error(e) } evBusy = false; redraw() }
 const redraw = () => { if (snaps.length) { render(); modal() } };
 
 function useDemo(msg) {
@@ -447,7 +484,7 @@ function paged(list) {
   const btn = (l, i, on, dis) => `<button data-p="${i}"${dis ? ' disabled' : ''}${on ? ' class="on"' : ''}>${l}</button>`;
   let mid = '', last = -1;
   nums.forEach(i => { if (i - last > 1) mid += '<span class="gap">…</span>'; mid += btn(i + 1, i, i === st.page); last = i });
-  $('#pager').innerHTML = n <= 10 ? '' : `<span class="mut mono">${a + 1}–${Math.min(a + st.size, n)} of ${n}</span><div class="pg">${btn('‹', st.page - 1, 0, st.page === 0)}${mid}${btn('›', st.page + 1, 0, st.page >= pages - 1)}</div><select id="size">${[10, 25, 50, 100].map(v => `<option value="${v}"${v === st.size ? ' selected' : ''}>${v} / page</option>`).join('')}</select>`;
+  $('#pager').innerHTML = (n <= 10 ? '' : `<span class="mut mono">${a + 1}–${Math.min(a + st.size, n)} of ${n}</span><div class="pg">${btn('‹', st.page - 1, 0, st.page === 0)}${mid}${btn('›', st.page + 1, 0, st.page >= pages - 1)}</div><select id="size">${[10, 25, 50, 100].map(v => `<option value="${v}"${v === st.size ? ' selected' : ''}>${v} / page</option>`).join('')}</select>`) + (st.tab === 'ev' ? moreBtn() : '');
   return list.slice(a, a + st.size);
 }
 function table(rows = stats()) {
@@ -490,12 +527,12 @@ function table(rows = stats()) {
 
 // ───────── UI wiring ─────────
 $('#q').oninput = e => { st.q = e.target.value; st.page = 0; table() };
-$('#pager').onclick = e => { const b = e.target.closest('button[data-p]'); if (!b || b.disabled) return; st.page = +b.dataset.p; table(); $('#tabs').scrollIntoView({ behavior: 'smooth', block: 'start' }) };
+$('#pager').onclick = e => { if (e.target.closest('[data-more]')) return moreEv(); const b = e.target.closest('button[data-p]'); if (!b || b.disabled) return; st.page = +b.dataset.p; table(); $('#tabs').scrollIntoView({ behavior: 'smooth', block: 'start' }) };
 $('#pager').onchange = e => { if (e.target.id === 'size') { st.size = +e.target.value; st.page = 0; table() } };
 $('#chain').onchange = e => { st.chain = e.target.value; st.page = 0; table() };
 
 // ───────── pool history modal ─────────
-$('#out').onclick = e => { const r = e.target.closest('[data-a]'); if (r) { sel = r.dataset.a.toLowerCase(); history.replaceState(null, '', '#' + sel); modal() } };
+$('#out').onclick = e => { const r = e.target.closest('[data-a]'); if (r) { sel = r.dataset.a.toLowerCase(); history.replaceState(null, '', '#' + sel); mpage = 0; modal() } };
 const closeModal = () => { sel = null; $('#modal').hidden = true; history.replaceState(null, '', location.pathname + location.search) };
 $('#modal').onclick = e => { if (e.target.id === 'modal') closeModal() };
 addEventListener('keydown', e => e.key === 'Escape' && closeModal());
@@ -516,13 +553,22 @@ function cfgHtml(c) {
   ];
   return `<div class="kv">${kv.map(([k, v]) => `<div><small>${k}</small>${v}</div>`).join('')}</div>`;
 }
+function mlog() { // paginated change log of the selected pool
+  const box = $('#m-log'); if (!box) return;
+  const all = events.filter(e => e.a === sel), n = all.length, pages = Math.max(1, Math.ceil(n / MSIZE)); mpage = Math.min(mpage, pages - 1);
+  const a = mpage * MSIZE, btn = (l, i, on, dis) => `<button data-mp="${i}"${dis ? ' disabled' : ''}${on ? ' class="on"' : ''}>${l}</button>`;
+  const nums = [...new Set([0, mpage - 1, mpage, mpage + 1, pages - 1])].filter(i => i >= 0 && i < pages).sort((x, y) => x - y);
+  let mid = '', last = -1; nums.forEach(i => { if (i - last > 1) mid += '<span class="gap">…</span>'; mid += btn(i + 1, i, i === mpage); last = i });
+  const pg = n > MSIZE ? `<span class="mut mono">${a + 1}–${Math.min(a + MSIZE, n)} of ${n}</span><div class="pg">${btn('‹', mpage - 1, 0, mpage === 0)}${mid}${btn('›', mpage + 1, 0, mpage >= pages - 1)}</div>` : '';
+  const more = moreBtn();
+  box.innerHTML = (n ? all.slice(a, a + MSIZE).map(evRow).join('') : '<div class="empty">No status or tier changes recorded' + (more ? ' in the events loaded so far.' : '.') + '</div>') + (pg || more ? `<div class="pager">${pg}${more}</div>` : '');
+}
 function modal() {
   const m = $('#modal'); if (!sel || !snaps.length) { m.hidden = true; return }
   const wasHidden = m.hidden; m.hidden = false;
   const r = stats().find(x => x.a === sel), info = reg.pools?.[sel] || {}, n = snaps.length, ser = snaps.map(s => s.p[sel] || null);
   const strip = f => `<svg viewBox="0 0 1000 22" preserveAspectRatio="none" height="22">${ser.map((v, i) => `<rect x="${(i * 1000 / n).toFixed(2)}" width="${Math.max(1000 / n - .8, .5).toFixed(2)}" height="22" rx="2" fill="${v ? f(v) : '#1a1d36'}"/>`).join('')}</svg>`;
   const mini = (l, v) => `<div><small>${l}</small><b>${v}</b></div>`;
-  const evs = events.filter(e => e.a === sel).slice(0, 25);
   const c = DEMO ? demoCfg(sel) : FULL[sel], cfgBlock = c ? `<div class="lbl">Pool configuration</div>${cfgHtml(c)}` : '';
   m.firstElementChild.innerHTML = `
     <div class="hd"><div><h2 style="font-size:24px">${esc(info.pair || 'Pool')} ${info.chain ? pill(info.chain, '#7c5cff') : ''}</h2>
@@ -538,7 +584,8 @@ function modal() {
     <div class="lbl">Volume · rolling 24h</div><div class="chart" id="m-vo"></div><div class="axis mono"><span></span><span id="m-vr"></span><span></span></div>
     <div class="lbl">TVL</div><div class="chart" id="m-tv"></div><div class="axis mono"><span></span><span id="m-tr"></span><span></span></div>
     ${cfgBlock}
-    <div class="lbl">Change log</div>${evs.length ? evs.map(evRow).join('') : '<div class="empty">No status or tier changes recorded.</div>'}`;
+    <div class="lbl">Change log</div><div id="m-log"></div>`;
+  mlog(); $('#m-log').onclick = e => { if (e.target.closest('[data-more]')) return moreEv(); const b = e.target.closest('button[data-mp]'); if (b && !b.disabled) { mpage = +b.dataset.mp; mlog() } };
   const a = area(ser.map(v => v?.[2] ?? null), 140);
   $('#m-sp').innerHTML = a.svg; $('#m-rng').textContent = `${fx(a.mn)} – ${fx(a.mx)} bps`;
   const vo = area(ser.map(v => v?.[4] ?? null), 110), tv = area(ser.map(v => v?.[3] ?? null), 110);
